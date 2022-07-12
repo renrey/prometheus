@@ -82,15 +82,16 @@ type ZookeeperTreeCacheEvent struct {
 }
 
 type zookeeperTreeCacheNode struct {
-	data     *[]byte
+	data     *[]byte // 当前node数据
 	events   chan zk.Event
 	done     chan struct{}
 	stopped  bool
-	children map[string]*zookeeperTreeCacheNode
+	children map[string]*zookeeperTreeCacheNode // 字节点的节点数组
 }
 
 // NewZookeeperTreeCache creates a new ZookeeperTreeCache for a given path.
 func NewZookeeperTreeCache(conn *zk.Conn, path string, events chan ZookeeperTreeCacheEvent, logger log.Logger) *ZookeeperTreeCache {
+	// 当前path的基础信息
 	tc := &ZookeeperTreeCache{
 		conn:   conn,
 		prefix: path,
@@ -100,6 +101,7 @@ func NewZookeeperTreeCache(conn *zk.Conn, path string, events chan ZookeeperTree
 
 		logger: logger,
 	}
+	// 当前path的node
 	tc.head = &zookeeperTreeCacheNode{
 		events:   make(chan zk.Event),
 		children: map[string]*zookeeperTreeCacheNode{},
@@ -107,6 +109,8 @@ func NewZookeeperTreeCache(conn *zk.Conn, path string, events chan ZookeeperTree
 		stopped:  true, // Set head's stop to be true so that recursiveDelete will not stop the head node.
 	}
 	tc.wg.Add(1)
+	// 就是启动对应path下缓存
+	// 等于启动当前path的监听，并进行data缓存
 	go tc.loop(path)
 	return tc
 }
@@ -134,6 +138,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 	failureMode := false
 	retryChan := make(chan struct{})
 
+	// 失败重试定义
 	failure := func() {
 		failureCounter.Inc()
 		failureMode = true
@@ -142,6 +147,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 		})
 	}
 
+	// 递归（包含子节点）获取node信息
 	err := tc.recursiveNodeUpdate(path, tc.head)
 	if err != nil {
 		level.Error(tc.logger).Log("msg", "Error during initial read of Zookeeper", "err", err)
@@ -150,7 +156,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 
 	for {
 		select {
-		case ev := <-tc.head.events:
+		case ev := <-tc.head.events: // 有监听到event变更
 			level.Debug(tc.logger).Log("msg", "Received Zookeeper event", "event", ev)
 			if failureMode {
 				continue
@@ -185,7 +191,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 					failure()
 				}
 			}
-		case <-retryChan:
+		case <-retryChan: // 重试
 			level.Info(tc.logger).Log("msg", "Attempting to resync state with Zookeeper")
 			previousState := &zookeeperTreeCacheNode{
 				children: tc.head.children,
@@ -203,7 +209,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 				level.Info(tc.logger).Log("Zookeeper resync successful")
 				failureMode = false
 			}
-		case <-tc.stop:
+		case <-tc.stop: // 关闭停止了
 			// Stop head as well.
 			tc.head.done <- struct{}{}
 			tc.recursiveStop(tc.head)
@@ -213,6 +219,7 @@ func (tc *ZookeeperTreeCache) loop(path string) {
 }
 
 func (tc *ZookeeperTreeCache) recursiveNodeUpdate(path string, node *zookeeperTreeCacheNode) error {
+	// 获取data，并添加watcher
 	data, _, dataWatcher, err := tc.conn.GetW(path)
 	if errors.Is(err, zk.ErrNoNode) {
 		tc.recursiveDelete(path, node)
@@ -269,7 +276,7 @@ func (tc *ZookeeperTreeCache) recursiveNodeUpdate(path string, node *zookeeperTr
 		numWatchers.Inc()
 		// Pass up zookeeper events, until the node is deleted.
 		select {
-		case event := <-dataWatcher:
+		case event := <-dataWatcher: // 从datawatcher放到node.events（不是直接，而是channel到channel）
 			node.events <- event
 		case event := <-childWatcher:
 			node.events <- event

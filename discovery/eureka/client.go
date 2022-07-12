@@ -79,6 +79,7 @@ type DataCenterInfo struct {
 const appListPath string = "/apps"
 
 func fetchApps(ctx context.Context, server string, client *http.Client) (*Applications, error) {
+	// http://ip/apps，全量请求
 	url := fmt.Sprintf("%s%s", server, appListPath)
 
 	request, err := http.NewRequest("GET", url, nil)
