@@ -57,6 +57,7 @@ func init() {
 	registerConfig(staticConfigsKey, elemTyp, StaticConfig{})
 }
 
+// 注册配置对象
 func registerConfig(yamlKey string, elemType reflect.Type, config Config) {
 	name := config.Name()
 	if _, ok := configNames[name]; ok {

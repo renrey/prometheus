@@ -95,6 +95,7 @@ var (
 )
 
 func init() {
+	// 注册app
 	prometheus.MustRegister(version.NewCollector(strings.ReplaceAll(appName, "-", "_")))
 
 	var err error
@@ -404,6 +405,7 @@ func main() {
 
 	logger := promlog.New(&cfg.promlogConfig)
 
+	// 配置功能
 	if err := cfg.setFeatureListOptions(logger); err != nil {
 		fmt.Fprintln(os.Stderr, fmt.Errorf("Error parsing feature list: %w", err))
 		os.Exit(1)
@@ -442,6 +444,7 @@ func main() {
 
 	// Throw error for invalid config before starting other components.
 	var cfgFile *config.Config
+	// 加载文件！！！转换成对象
 	if cfgFile, err = config.LoadFile(cfg.configFile, agentMode, false, log.NewNopLogger()); err != nil {
 		absPath, pathErr := filepath.Abs(cfg.configFile)
 		if pathErr != nil {
@@ -542,6 +545,7 @@ func main() {
 	level.Info(logger).Log("fd_limits", prom_runtime.FdLimits())
 	level.Info(logger).Log("vm_limits", prom_runtime.VMLimits())
 
+	// 储存对象创建
 	var (
 		localStorage  = &readyStorage{stats: tsdb.NewDBStats()}
 		scraper       = &readyScrapeManager{}
@@ -557,10 +561,13 @@ func main() {
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
-		discoveryManagerScrape  discoveryManager
-		discoveryManagerNotify  discoveryManager
+		// Scrape里用的服务发现
+		discoveryManagerScrape discoveryManager
+		// Alert告警通知里的服务发现
+		discoveryManagerNotify discoveryManager
 	)
 
+	// 创建discovery的对象
 	if cfg.enableNewSDManager {
 		discovery.RegisterMetrics()
 		discoveryManagerScrape = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
@@ -670,6 +677,7 @@ func main() {
 	// This is passed to ruleManager.Update().
 	externalURL := cfg.web.ExternalURL.String()
 
+	// reload重新初始化，函数配置
 	reloaders := []reloader{
 		{
 			name:     "db_storage",
@@ -706,11 +714,13 @@ func main() {
 			name:     "scrape",
 			reloader: scrapeManager.ApplyConfig,
 		}, {
+			// scrape拉取的sd
 			name: "scrape_sd",
 			reloader: func(cfg *config.Config) error {
+				// 把配置文件（yaml）的配置重新生成一次provider
 				c := make(map[string]discovery.Configs)
 				for _, v := range cfg.ScrapeConfigs {
-					c[v.JobName] = v.ServiceDiscoveryConfigs
+					c[v.JobName] = v.ServiceDiscoveryConfigs // 1个jobname对应job里服务发现配置数组
 				}
 				return discoveryManagerScrape.ApplyConfig(c)
 			},
@@ -718,6 +728,7 @@ func main() {
 			name:     "notify",
 			reloader: notifierManager.ApplyConfig,
 		}, {
+			// 告警通知的sd
 			name: "notify_sd",
 			reloader: func(cfg *config.Config) error {
 				c := make(map[string]discovery.Configs)
@@ -793,15 +804,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 程序正常执行的一些函数
+	// g.Add() : 第一个为执行函数，第2个为返回错误后的处理
 	var g run.Group
 	{
+		// 这里定义的是发现程序需要关闭，调用相关的关闭函数
 		// Termination handler.
+
+		// 这里是监听信号
+		// 1. 创建存放信号的channel变量
 		term := make(chan os.Signal, 1)
+		// 2. 设置监听什么类型的信号到变量term
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})
 		g.Add(
+			// 当这里返回，程序真的需要关闭
 			func() error {
 				// Don't forget to release the reloadReady channel so that waiting blocks can exit normally.
+				// 看是否有符合，有符合的就是要关闭了
 				select {
 				case <-term:
 					level.Warn(logger).Log("msg", "Received SIGTERM, exiting gracefully...")
@@ -820,9 +840,11 @@ func main() {
 		)
 	}
 	{
+		// 启动发现管理器
 		// Scrape discovery manager.
 		g.Add(
 			func() error {
+				// https://vscode.dev/github/renrey/prometheus/blob/44fcf876caad9a5d28b92a728d2c98c34015d377/discovery/manager.go#L181
 				err := discoveryManagerScrape.Run()
 				level.Info(logger).Log("msg", "Scrape discovery manager stopped")
 				return err
@@ -861,6 +883,7 @@ func main() {
 		)
 	}
 	{
+		// 启动拉取Scrape ，真正的执行逻辑
 		// Scrape manager.
 		g.Add(
 			func() error {
@@ -869,7 +892,7 @@ func main() {
 				// It depends on the config being in sync with the discovery manager so
 				// we wait until the config is fully loaded.
 				<-reloadReady.C
-
+				// 里面的SyncCh，就是当前所有job对应的实例数组
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
@@ -898,6 +921,7 @@ func main() {
 		)
 	}
 	{
+		// 重新初始化
 		// Reload handler.
 
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
@@ -1108,6 +1132,7 @@ func main() {
 			},
 		)
 	}
+	// Run() 启动程序，直到所有actors都返回才停止
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)

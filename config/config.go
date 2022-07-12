@@ -71,6 +71,7 @@ func Load(s string, expandExternalLabels bool, logger log.Logger) (*Config, erro
 	// point as well.
 	*cfg = DefaultConfig
 
+	// yaml解析
 	err := yaml.UnmarshalStrict([]byte(s), cfg)
 	if err != nil {
 		return nil, err
@@ -102,6 +103,7 @@ func Load(s string, expandExternalLabels bool, logger log.Logger) (*Config, erro
 
 // LoadFile parses the given YAML file into a Config.
 func LoadFile(filename string, agentMode, expandExternalLabels bool, logger log.Logger) (*Config, error) {
+	// 1. 读取yaml文件内容
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err

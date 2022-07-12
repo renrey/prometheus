@@ -72,8 +72,10 @@ func NewDiscovery(l log.Logger, mech string, interval time.Duration, refreshf fu
 }
 
 // Run implements the Discoverer interface.
+// 就是定时执行
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 	// Get an initial set right away.
+	// 执行1次refresh刷新
 	tgs, err := d.refresh(ctx)
 	if err != nil {
 		if !errors.Is(ctx.Err(), context.Canceled) {
@@ -81,19 +83,20 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 		}
 	} else {
 		select {
-		case ch <- tgs:
-		case <-ctx.Done():
+		case ch <- tgs: // 把完整的tg数组放入到ch中
+		case <-ctx.Done(): // 全局程序关闭了
 			return
 		}
 	}
 
+	// 启动下一次的ticker
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
-			tgs, err := d.refresh(ctx)
+		case <-ticker.C: // 到了定时间隔
+			tgs, err := d.refresh(ctx) // 进行refresh（全量获取）
 			if err != nil {
 				if !errors.Is(ctx.Err(), context.Canceled) {
 					level.Error(d.logger).Log("msg", "Unable to refresh target groups", "err", err.Error())
@@ -102,11 +105,11 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 			}
 
 			select {
-			case ch <- tgs:
-			case <-ctx.Done():
+			case ch <- tgs: // 把完整的tg数组放入到ch中（eureka中是单个新tg）
+			case <-ctx.Done(): // 全局关闭了
 				return
 			}
-		case <-ctx.Done():
+		case <-ctx.Done(): // 全局关闭了
 			return
 		}
 	}
@@ -115,7 +118,7 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
 	now := time.Now()
 	defer d.duration.Observe(time.Since(now).Seconds())
-	tgs, err := d.refreshf(ctx)
+	tgs, err := d.refreshf(ctx) // 执行刷新的函数逻辑
 	if err != nil {
 		d.failures.Inc()
 	}

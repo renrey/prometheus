@@ -161,6 +161,7 @@ func NewDiscovery(
 		logger = log.NewNopLogger()
 	}
 
+	// 1. 创建zk连接
 	conn, _, err := zk.Connect(
 		srvs, timeout,
 		func(c *zk.Conn) {
@@ -169,7 +170,9 @@ func NewDiscovery(
 	if err != nil {
 		return nil, err
 	}
+	// 2. 创建channel
 	updates := make(chan treecache.ZookeeperTreeCacheEvent)
+	// 3， 创建sd对象
 	sd := &Discovery{
 		conn:    conn,
 		updates: updates,
@@ -177,16 +180,18 @@ func NewDiscovery(
 		parse:   pf,
 		logger:  logger,
 	}
+	// 4. 需要监听的path缓存（包含里面的子节点）
 	for _, path := range paths {
-		pathUpdate := make(chan treecache.ZookeeperTreeCacheEvent)
-		sd.pathUpdates = append(sd.pathUpdates, pathUpdate)
-		sd.treeCaches = append(sd.treeCaches, treecache.NewZookeeperTreeCache(conn, path, pathUpdate, logger))
+		pathUpdate := make(chan treecache.ZookeeperTreeCacheEvent)                                             // 也是channel
+		sd.pathUpdates = append(sd.pathUpdates, pathUpdate)                                                    // 保存channel
+		sd.treeCaches = append(sd.treeCaches, treecache.NewZookeeperTreeCache(conn, path, pathUpdate, logger)) // 缓存对象
 	}
 	return sd, nil
 }
 
 // Run implements the Discoverer interface.
 func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
+	// 关闭时执行
 	defer func() {
 		for _, tc := range d.treeCaches {
 			tc.Stop()
@@ -199,11 +204,14 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 		d.conn.Close()
 	}()
 
+	// 遍历所有需要监听的path缓存对应channel
 	for _, pathUpdate := range d.pathUpdates {
+		// 启动新的goruntime，监听对于缓存（树，包含子节点）是否有变更，有变更就交给updates
 		go func(update chan treecache.ZookeeperTreeCacheEvent) {
+			// 有变更
 			for event := range update {
 				select {
-				case d.updates <- event:
+				case d.updates <- event: // 变更交给updates
 				case <-ctx.Done():
 					return
 				}
@@ -215,15 +223,18 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 		select {
 		case <-ctx.Done():
 			return
-		case event := <-d.updates:
+		case event := <-d.updates: // 处理上面的那些树缓存监听到的变更
+			// 创建新的tg，source=path
 			tg := &targetgroup.Group{
 				Source: event.Path,
 			}
 			if event.Data != nil {
+				// data转换成labelset
 				labelSet, err := d.parse(*event.Data, event.Path)
 				if err == nil {
+					// targets直接只有当前labelSet
 					tg.Targets = []model.LabelSet{labelSet}
-					d.sources[event.Path] = tg
+					d.sources[event.Path] = tg // 当前sd客户端的source保存对应path的tg
 				} else {
 					delete(d.sources, event.Path)
 				}
@@ -233,7 +244,7 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*targetgroup.Group) {
 			select {
 			case <-ctx.Done():
 				return
-			case ch <- []*targetgroup.Group{tg}:
+			case ch <- []*targetgroup.Group{tg}: // 返回单个新tg
 			}
 		}
 	}

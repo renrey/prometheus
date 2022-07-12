@@ -136,28 +136,38 @@ func NewDiscovery(conf *SDConfig, logger log.Logger) (*Discovery, error) {
 	return d, nil
 }
 
+// 刷新缓存
 func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
+	// 1. 发起fetchApp请求
 	apps, err := fetchApps(ctx, d.server, d.client)
 	if err != nil {
 		return nil, err
 	}
 
+	// 2. 创建新的tg（group），名字=eureka
 	tg := &targetgroup.Group{
 		Source: "eureka",
 	}
 
+	// 3. 遍历请求结果（全量）
 	for _, app := range apps.Applications {
-		targets := targetsForApp(&app)
-		tg.Targets = append(tg.Targets, targets...)
+		targets := targetsForApp(&app)              // （1）根据当前app，转换n个target（把instance转成target，1对1）
+		tg.Targets = append(tg.Targets, targets...) // （2）把这些target（LabelSet）加入到tg.Targets
 	}
+	// 4. 返回使用全新数据的新tg，数组里只有这个新tg
+	// source = eureka
+	// targets：
 	return []*targetgroup.Group{tg}, nil
 }
 
 func targetsForApp(app *Application) []model.LabelSet {
+	// LabelSet数组
 	targets := make([]model.LabelSet, 0, len(app.Instances))
 
 	// Gather info about the app's 'instances'. Each instance is considered a task.
+	// 1. 遍历app中的实例
 	for _, t := range app.Instances {
+		// 转换实例信息为target（LabelSet）
 		var targetAddress string
 		if t.Port != nil {
 			targetAddress = net.JoinHostPort(t.HostName, strconv.Itoa(t.Port.Port))
@@ -209,7 +219,7 @@ func targetsForApp(app *Application) []model.LabelSet {
 				target[model.LabelName(appInstanceMetadataPrefix+ln)] = lv(m.Content)
 			}
 		}
-
+		// 2.把target存到数组
 		targets = append(targets, target)
 
 	}

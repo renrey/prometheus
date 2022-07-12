@@ -24,11 +24,14 @@ import (
 type Group struct {
 	// Targets is a list of targets identified by a label set. Each target is
 	// uniquely identifiable in the group by its address label.
+	// lableset 数组
+	// 元素：map， 即是1个实例对应1个map，map就是里面的属性
 	Targets []model.LabelSet
 	// Labels is a set of labels that is common across all targets in the group.
 	Labels model.LabelSet
 
 	// Source is an identifier that describes a group of targets.
+	// 这组targets的标识，zk里为path，eureka就只是eureka
 	Source string
 }
 

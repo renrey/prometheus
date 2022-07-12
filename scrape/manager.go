@@ -157,12 +157,13 @@ type Manager struct {
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	go m.reloader()
 	for {
+		// 继续监听所有实例的channel
 		select {
-		case ts := <-tsets:
-			m.updateTsets(ts)
+		case ts := <-tsets: // 有新的变化
+			m.updateTsets(ts) // 更新
 
 			select {
-			case m.triggerReload <- struct{}{}:
+			case m.triggerReload <- struct{}{}: // 告诉其他地方更新完了
 			default:
 			}
 
@@ -254,7 +255,7 @@ func (m *Manager) Stop() {
 
 func (m *Manager) updateTsets(tsets map[string][]*targetgroup.Group) {
 	m.mtxScrape.Lock()
-	m.targetSets = tsets
+	m.targetSets = tsets // 直接更新
 	m.mtxScrape.Unlock()
 }
 
