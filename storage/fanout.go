@@ -115,7 +115,9 @@ func (f *fanout) ChunkQuerier(ctx context.Context, mint, maxt int64) (ChunkQueri
 }
 
 func (f *fanout) Appender(ctx context.Context) Appender {
+	// 主要的
 	primary := f.primary.Appender(ctx)
+	// 备用的（n个）
 	secondaries := make([]Appender, 0, len(f.secondaries))
 	for _, storage := range f.secondaries {
 		secondaries = append(secondaries, storage.Appender(ctx))

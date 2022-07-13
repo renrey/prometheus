@@ -64,8 +64,8 @@ type Target struct {
 // NewTarget creates a reasonably configured target for querying.
 func NewTarget(labels, discoveredLabels labels.Labels, params url.Values) *Target {
 	return &Target{
-		labels:           labels,
-		discoveredLabels: discoveredLabels,
+		labels:           labels,           // 实际（relabel转换后）label
+		discoveredLabels: discoveredLabels, // 初始传入，就是原始label 配置
 		params:           params,
 		health:           HealthUnknown,
 	}
@@ -374,9 +374,11 @@ func PopulateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 		}
 	}
 
+	// 进行Relabel处理配置！！！
 	preRelabelLabels := lb.Labels()
 	lset = relabel.Process(preRelabelLabels, cfg.RelabelConfigs...)
 
+	// label被drop掉了（由于relabel），返回空
 	// Check if the target was dropped.
 	if lset == nil {
 		return nil, preRelabelLabels, nil
@@ -389,18 +391,23 @@ func PopulateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 
 	// addPort checks whether we should add a default port to the address.
 	// If the address is not valid, we don't append a port either.
+	// 判断是否需要加端口
 	addPort := func(s string) bool {
 		// If we can split, a port exists and we don't have to add one.
+		// 有端口，不用加
 		if _, _, err := net.SplitHostPort(s); err == nil {
 			return false
 		}
 		// If adding a port makes it valid, the previous error
 		// was not due to an invalid address and we can append a port.
+		// 没端口，但是地址格式需要正确
 		_, _, err := net.SplitHostPort(s + ":1234")
 		return err == nil
 	}
+	// 实例的地址
 	addr := lset.Get(model.AddressLabel)
 	// If it's an address with no trailing port, infer it based on the used scheme.
+	// 需要添加端口号，补充端口
 	if addPort(addr) {
 		// Addresses reaching this point are already wrapped in [] if necessary.
 		switch lset.Get(model.SchemeLabel) {
@@ -418,6 +425,7 @@ func PopulateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 		return nil, nil, err
 	}
 
+	// 拉取间隔
 	interval := lset.Get(model.ScrapeIntervalLabel)
 	intervalDuration, err := model.ParseDuration(interval)
 	if err != nil {
@@ -427,6 +435,7 @@ func PopulateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 		return nil, nil, errors.New("scrape interval cannot be 0")
 	}
 
+	// 拉取超时
 	timeout := lset.Get(model.ScrapeTimeoutLabel)
 	timeoutDuration, err := model.ParseDuration(timeout)
 	if err != nil {
@@ -466,8 +475,9 @@ func PopulateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 // TargetsFromGroup builds targets based on the given TargetGroup and config.
 func TargetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Target, []error) {
 	targets := make([]*Target, 0, len(tg.Targets))
-	failures := []error{}
+	failures := []error{} // 失败的
 
+	// 遍历实例
 	for i, tlset := range tg.Targets {
 		lbls := make([]labels.Label, 0, len(tlset)+len(tg.Labels))
 
@@ -482,10 +492,15 @@ func TargetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Targe
 
 		lset := labels.New(lbls...)
 
+		// 1. 检查实例参数，转换，进行relabel，生成实际的label，界面上显示的那种
+		// origLabels：原始的label，配置
+		// lbls：最终处理后的label，空就是被排除掉（drop）了
 		lbls, origLabels, err := PopulateLabels(lset, cfg)
 		if err != nil {
 			failures = append(failures, errors.Wrapf(err, "instance %d in group %s", i, tg))
 		}
+		// 1. 最终需要的
+		// 2. 被排除掉的（drop，无lbls，有origLabels）
 		if lbls != nil || origLabels != nil {
 			targets = append(targets, NewTarget(lbls, origLabels, cfg.Params))
 		}
