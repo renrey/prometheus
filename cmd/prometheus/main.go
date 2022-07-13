@@ -677,9 +677,11 @@ func main() {
 	// This is passed to ruleManager.Update().
 	externalURL := cfg.web.ExternalURL.String()
 
+	// 1. 实际先把这些配置应用了，再进行启动
 	// reload重新初始化，函数配置
 	reloaders := []reloader{
 		{
+			// 底层存储配置
 			name:     "db_storage",
 			reloader: localStorage.ApplyConfig,
 		}, {
@@ -841,7 +843,7 @@ func main() {
 		)
 	}
 	{
-		// 启动发现管理器
+		// 启动Scrape的发现管理器
 		// Scrape discovery manager.
 		g.Add(
 			func() error {
@@ -884,7 +886,7 @@ func main() {
 		)
 	}
 	{
-		// 启动拉取Scrape ，真正的执行逻辑
+		// 启动拉取Scrape ，真正的拉执行逻辑
 		// Scrape manager.
 		g.Add(
 			func() error {
@@ -926,6 +928,7 @@ func main() {
 		// 重新初始化
 		// Reload handler.
 
+		// 注意：第一次启动，在后面的执行完后，先执行reloader的，在执行前面的action
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
 		// long and synchronous tsdb init.
 		hup := make(chan os.Signal, 1)
@@ -990,23 +993,27 @@ func main() {
 		)
 	}
 	if !agentMode {
+		// 底层存储tsdb启动
 		// TSDB.
 		opts := cfg.tsdb.ToTSDBOptions()
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
 				level.Info(logger).Log("msg", "Starting TSDB ...")
+				// 1个segment大小默认限制 10m-256m
 				if cfg.tsdb.WALSegmentSize != 0 {
 					if cfg.tsdb.WALSegmentSize < 10*1024*1024 || cfg.tsdb.WALSegmentSize > 256*1024*1024 {
 						return errors.New("flag 'storage.tsdb.wal-segment-size' must be set between 10MB and 256MB")
 					}
 				}
+				// 块的大小需要超过1m
 				if cfg.tsdb.MaxBlockChunkSegmentSize != 0 {
 					if cfg.tsdb.MaxBlockChunkSegmentSize < 1024*1024 {
 						return errors.New("flag 'storage.tsdb.max-block-chunk-segment-size' must be set over 1MB")
 					}
 				}
 
+				// 1. 真正打开DB！！！
 				db, err := openDBWithMetrics(localStoragePath, logger, prometheus.DefaultRegisterer, &opts, localStorage.getStats())
 				if err != nil {
 					return fmt.Errorf("opening storage failed: %w", err)
@@ -1032,7 +1039,9 @@ func main() {
 				)
 
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
+				// 保存使用的db
 				localStorage.Set(db, startTimeMargin)
+				// 等待关闭
 				close(dbOpen)
 				<-cancel
 				return nil

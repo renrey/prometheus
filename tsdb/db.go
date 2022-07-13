@@ -573,6 +573,7 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, stat
 	var rngs []int64
 	opts, rngs = validateOpts(opts, nil)
 
+	// 启动打开
 	return open(dir, l, r, opts, rngs, stats)
 }
 
@@ -602,15 +603,22 @@ func validateOpts(opts *Options, rngs []int64) (*Options, []int64) {
 	if len(rngs) == 0 {
 		// Start with smallest block duration and create exponential buckets until the exceed the
 		// configured maximum block duration.
+		// MinBlockDuration：就是block需要持久化的最少时间
+		// 就是初始化一个时间数组，有10个，每个上一个*3的时间
+		// 第一个元素就是头开始的数据需要持久化，需要达到的时间
+		// 就是实现每10次持久化，每次数据持久化所属的存活时间都是上次的3倍
 		rngs = ExponentialBlockRanges(opts.MinBlockDuration, 10, 3)
 	}
 	return opts, rngs
 }
 
+// 在指定目录开启一个新的db
+// 初始化：lockfile（锁文件）、WAL、compactor（合并）、head（回放WAL日志）
 // open returns a new DB in the given directory.
 // It initializes the lockfile, WAL, compactor, and Head (by replaying the WAL), and runs the database.
 // It is not safe to open more than one DB in the same directory.
 func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs []int64, stats *DBStats) (_ *DB, returnedErr error) {
+	// 1. 创建目录
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
 	}
@@ -620,8 +628,9 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	if stats == nil {
 		stats = NewDBStats()
 	}
-
+	// 可以持久化的时间数组（实现递增持久化时间）
 	for i, v := range rngs {
+		// 默认第二个才大于，截取0-1？，反正就没每次递增吧
 		if v > opts.MaxBlockDuration {
 			rngs = rngs[:i]
 			break
@@ -633,12 +642,15 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		return nil, errors.Wrap(err, "repair bad index version")
 	}
 
+	// wal日志的目录：dir目录下的wal目录
 	walDir := filepath.Join(dir, "wal")
 
+	// 迁移wal目录下的原来wal日志
 	// Migrate old WAL if one exists.
 	if err := MigrateWAL(l, walDir); err != nil {
 		return nil, errors.Wrap(err, "migrate WAL")
 	}
+	// 删除临时dir？
 	for _, tmpDir := range []string{walDir, dir} {
 		// Remove tmp dirs.
 		if err := removeBestEffortTmpDirs(l, tmpDir); err != nil {
@@ -646,6 +658,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		}
 	}
 
+	// 创建db对象
 	db := &DB{
 		dir:            dir,
 		logger:         l,
@@ -657,6 +670,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		chunkPool:      chunkenc.NewPool(),
 		blocksToDelete: opts.BlocksToDelete,
 	}
+	// 如果启动失败的操作
 	defer func() {
 		// Close files if startup fails somewhere.
 		if returnedErr == nil {
@@ -676,6 +690,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	}
 
 	var err error
+	// 锁
 	db.locker, err = tsdbutil.NewDirLocker(dir, "tsdb", db.logger, r)
 	if err != nil {
 		return nil, err
@@ -687,6 +702,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// compactor 合并器
 	db.compactor, err = NewLeveledCompactorWithChunkSize(ctx, r, l, rngs, db.chunkPool, opts.MaxBlockChunkSegmentSize, nil)
 	if err != nil {
 		cancel()
@@ -695,13 +711,14 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	db.compactCancel = cancel
 
 	var wlog *wal.WAL
-	segmentSize := wal.DefaultSegmentSize
+	segmentSize := wal.DefaultSegmentSize // 1个wal segment的大小
 	// Wal is enabled.
 	if opts.WALSegmentSize >= 0 {
 		// Wal is set to a custom size.
 		if opts.WALSegmentSize > 0 {
 			segmentSize = opts.WALSegmentSize
 		}
+		// 新建1个wal日志文件！！！
 		wlog, err = wal.NewSize(l, r, walDir, segmentSize, opts.WALCompression)
 		if err != nil {
 			return nil, err
@@ -723,11 +740,13 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		// We only override this flag if isolation is disabled at DB level. We use the default otherwise.
 		headOpts.IsolationDisabled = opts.IsolationDisabled
 	}
+	// block的头---第一个
 	db.head, err = NewHead(r, l, wlog, headOpts, stats.Head)
 	if err != nil {
 		return nil, err
 	}
 
+	// 注册指标？
 	// Register metrics after assigning the head block.
 	db.metrics = newDBMetrics(db, r)
 	maxBytes := opts.MaxBytes
@@ -736,6 +755,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	}
 	db.metrics.maxBytes.Set(float64(maxBytes))
 
+	// db重载？数据相关加载
 	if err := db.reload(); err != nil {
 		return nil, err
 	}
@@ -755,6 +775,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		}
 	}
 
+	// 另外运行db
 	go db.run()
 
 	return db, nil
@@ -1035,6 +1056,7 @@ func getBlock(allBlocks []*Block, id ulid.ULID) (*Block, bool) {
 
 // reload reloads blocks and truncates the head and its WAL.
 func (db *DB) reload() error {
+	// 1. 加载所有的block
 	if err := db.reloadBlocks(); err != nil {
 		return errors.Wrap(err, "reloadBlocks")
 	}
@@ -1152,22 +1174,29 @@ func (db *DB) reloadBlocks() (err error) {
 }
 
 func openBlocks(l log.Logger, dir string, loaded []*Block, chunkPool chunkenc.Pool) (blocks []*Block, corrupted map[ulid.ULID]error, err error) {
+	// 获取当前dir的所有子目录作为block目录
 	bDirs, err := blockDirs(dir)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "find blocks")
 	}
 
 	corrupted = make(map[ulid.ULID]error)
+	// 获取当前dir下所有的block，并打开
 	for _, bDir := range bDirs {
+		// 1. 读取block目录下的meta.json元数据
+		// meta：BlockMeta
 		meta, _, err := readMetaFile(bDir)
 		if err != nil {
 			level.Error(l).Log("msg", "Failed to read meta.json for a block during reloadBlocks. Skipping", "dir", bDir, "err", err)
 			continue
 		}
 
+		// 2. 查看内存中已加载这个block，没有就进行加载
 		// See if we already have the block in memory or open it otherwise.
+		// 用ulid 作为标识
 		block, open := getBlock(loaded, meta.ULID)
 		if !open {
+			// 没有时，加载打开！！！
 			block, err = OpenBlock(l, bDir, chunkPool)
 			if err != nil {
 				corrupted[meta.ULID] = err
@@ -1747,12 +1776,14 @@ func isTmpDir(fi fs.DirEntry) bool {
 }
 
 func blockDirs(dir string) ([]string, error) {
+	// 加载目录
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	var dirs []string
 
+	// 遍历目录文件，获取下面的block目录
 	for _, f := range files {
 		if isBlockDir(f) {
 			dirs = append(dirs, filepath.Join(dir, f.Name()))
