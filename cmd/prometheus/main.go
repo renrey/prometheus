@@ -709,12 +709,13 @@ func main() {
 				return nil
 			},
 		}, {
+			// scrape配置
 			// The Scrape and notifier managers need to reload before the Discovery manager as
 			// they need to read the most updated config when receiving the new targets list.
 			name:     "scrape",
-			reloader: scrapeManager.ApplyConfig,
+			reloader: scrapeManager.ApplyConfig, // 执行应用配置
 		}, {
-			// scrape拉取的sd
+			// scrape配置的sd服务配置
 			name: "scrape_sd",
 			reloader: func(cfg *config.Config) error {
 				// 把配置文件（yaml）的配置重新生成一次provider
@@ -893,6 +894,7 @@ func main() {
 				// we wait until the config is fully loaded.
 				<-reloadReady.C
 				// 里面的SyncCh，就是当前所有job对应的实例数组
+				// 启动
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err

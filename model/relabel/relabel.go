@@ -194,6 +194,7 @@ func (re Regexp) String() string {
 // May return the input labelSet modified.
 func Process(labels labels.Labels, cfgs ...*Config) labels.Labels {
 	for _, cfg := range cfgs {
+		// 进行对应action处理执行，如果nil，就是当前target不符合被排除
 		labels = relabel(labels, cfg)
 		if labels == nil {
 			return nil

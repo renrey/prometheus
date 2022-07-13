@@ -155,12 +155,13 @@ type Manager struct {
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
+	// 异步启动：定时检查是否需要reload，需要就执行
 	go m.reloader()
 	for {
 		// 继续监听所有实例的channel
 		select {
 		case ts := <-tsets: // 有新的变化
-			m.updateTsets(ts) // 更新
+			m.updateTsets(ts) // 更新（就是更新mananger的对象）
 
 			select {
 			case m.triggerReload <- struct{}{}: // 告诉其他地方更新完了
@@ -173,25 +174,28 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	}
 }
 
+// 定时检查是否需要reload，需要就执行
 func (m *Manager) reloader() {
+	// 拉取的间隔（默认用的sd发现的间隔，但不能小于5s）
 	reloadIntervalDuration := m.opts.DiscoveryReloadInterval
 	if reloadIntervalDuration < model.Duration(5*time.Second) {
 		reloadIntervalDuration = model.Duration(5 * time.Second)
 	}
 
+	// 定时器（间隔5s以上）
 	ticker := time.NewTicker(time.Duration(reloadIntervalDuration))
 
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-m.graceShut:
+		case <-m.graceShut: // 代表关闭了
 			return
-		case <-ticker.C:
+		case <-ticker.C: // 定时到了
 			select {
-			case <-m.triggerReload:
-				m.reload()
-			case <-m.graceShut:
+			case <-m.triggerReload: // 需要reload
+				m.reload() // 执行reload
+			case <-m.graceShut: // 关闭
 				return
 			}
 		}
@@ -201,23 +205,30 @@ func (m *Manager) reloader() {
 func (m *Manager) reload() {
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
+	// 遍历job - 实例
 	for setName, groups := range m.targetSets {
+		// scrapePools没有对应job的对象，就进行设置创建，有就到下面的go func
 		if _, ok := m.scrapePools[setName]; !ok {
+			// job的配置
 			scrapeConfig, ok := m.scrapeConfigs[setName]
 			if !ok {
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
 				continue
 			}
+			// 根据job的拉取配置建一个ScrapePool
 			sp, err := newScrapePool(scrapeConfig, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName), m.opts.ExtraMetrics, m.opts.PassMetadataInContext, m.opts.HTTPClientOptions)
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
 				continue
 			}
+			// 保存到scrapePools
 			m.scrapePools[setName] = sp
 		}
 
+		// 告诉下面的wait执行完了
 		wg.Add(1)
 		// Run the sync in parallel as these take a while and at high load can't catch up.
+		// 异步执行
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
 			sp.Sync(groups)
 			wg.Done()
@@ -225,6 +236,7 @@ func (m *Manager) reload() {
 
 	}
 	m.mtxScrape.Unlock()
+	// 阻塞等上面的add
 	wg.Wait()
 }
 
@@ -264,7 +276,9 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	m.mtxScrape.Lock()
 	defer m.mtxScrape.Unlock()
 
+	// 1. 把job配置保存到manager的scrapeConfigs中
 	c := make(map[string]*config.ScrapeConfig)
+	// scrapeConfigs就是一个job对应一个ScrapeConfigs
 	for _, scfg := range cfg.ScrapeConfigs {
 		c[scfg.JobName] = scfg
 	}
@@ -274,9 +288,11 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 		return err
 	}
 
+	// 这里是已有在运行的，重新reload才会执行
 	// Cleanup and reload pool if the configuration has changed.
 	var failed bool
 	for name, sp := range m.scrapePools {
+		// 有相同的，停止并删掉原来的
 		if cfg, ok := m.scrapeConfigs[name]; !ok {
 			sp.stop()
 			delete(m.scrapePools, name)
