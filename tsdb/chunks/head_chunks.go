@@ -878,6 +878,7 @@ func (cdm *ChunkDiskMapper) Truncate(mint int64) error {
 		if seq == cdm.curFileSequence || cdm.mmappedChunkFiles[seq].maxt >= mint {
 			break
 		}
+		// 当前chunk的maxtime小于 mint 需要删除
 		if cdm.mmappedChunkFiles[seq].maxt < mint {
 			removedFiles = append(removedFiles, seq)
 		}

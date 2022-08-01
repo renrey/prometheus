@@ -511,6 +511,7 @@ func newReader(bs []ByteSlice, cs []io.Closer, pool chunkenc.Pool) (*Reader, err
 // NewDirReader returns a new Reader against sequentially numbered files in the
 // given directory.
 func NewDirReader(dir string, pool chunkenc.Pool) (*Reader, error) {
+	// 读取chunks目录的文件n个
 	files, err := sequenceFiles(dir)
 	if err != nil {
 		return nil, err
@@ -524,6 +525,7 @@ func NewDirReader(dir string, pool chunkenc.Pool) (*Reader, error) {
 		cs []io.Closer
 	)
 	for _, fn := range files {
+		// 使用mmap读取文件（映射）
 		f, err := fileutil.OpenMmapFile(fn)
 		if err != nil {
 			return nil, tsdb_errors.NewMulti(

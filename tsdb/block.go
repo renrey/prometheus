@@ -281,33 +281,39 @@ type Block struct {
 
 // OpenBlock opens the block in the directory. It can be passed a chunk pool, which is used
 // to instantiate chunk structs.
+// 创建index、chunk、tombstones的reader
 func OpenBlock(logger log.Logger, dir string, pool chunkenc.Pool) (pb *Block, err error) {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
+	// 存储下面几种目录的reader，万一其中下面的代码其中执行失败，把前面以创建的reader 进行close
 	var closers []io.Closer
 	defer func() {
 		if err != nil {
 			err = tsdb_errors.NewMulti(err, tsdb_errors.CloseAll(closers)).Err()
 		}
 	}()
+	// 读元数据
+	// BlockMeta
 	meta, sizeMeta, err := readMetaFile(dir)
 	if err != nil {
 		return nil, err
 	}
-
+	//  /dir/chunks目录下的文件读取器
 	cr, err := chunks.NewDirReader(chunkDir(dir), pool)
 	if err != nil {
 		return nil, err
 	}
 	closers = append(closers, cr)
 
+	// /dir/index 下的文件读取器
 	ir, err := index.NewFileReader(filepath.Join(dir, indexFilename))
 	if err != nil {
 		return nil, err
 	}
 	closers = append(closers, ir)
 
+	// /dir/tombstones
 	tr, sizeTomb, err := tombstones.ReadTombstones(dir)
 	if err != nil {
 		return nil, err
