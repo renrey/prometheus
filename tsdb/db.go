@@ -726,6 +726,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		}
 	}
 
+	// 默认参数生成
 	headOpts := DefaultHeadOptions()
 	headOpts.ChunkRange = rngs[0]
 	headOpts.ChunkDirRoot = dir
@@ -768,6 +769,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 		minValidTime = blocks[len(blocks)-1].Meta().MaxTime
 	}
 
+	// head初始化
 	if initErr := db.head.Init(minValidTime); initErr != nil {
 		db.head.metrics.walCorruptionsTotal.Inc()
 		level.Warn(db.logger).Log("msg", "Encountered WAL read error, attempting repair", "err", initErr)
@@ -1068,7 +1070,7 @@ func (db *DB) reload() error {
 	if len(db.blocks) == 0 {
 		return nil
 	}
-	// head block（时间最早） 截断，删除
+	// head 中截断，删除比当前最后block的最后时间早的chunk文件、WAL：就是已经变成block，就不需要这期间or更早的chunk、WAL
 	if err := db.head.Truncate(db.blocks[len(db.blocks)-1].MaxTime()); err != nil {
 		return errors.Wrap(err, "head truncate")
 	}

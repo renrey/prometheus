@@ -258,6 +258,7 @@ func NewChunkDiskMapper(reg prometheus.Registerer, dir string, pool chunkenc.Poo
 		m.pool = chunkenc.NewPool()
 	}
 
+	// mmap加载chunk文件
 	return m, m.openMMapFiles()
 }
 
@@ -274,25 +275,28 @@ func (cdm *ChunkDiskMapper) openMMapFiles() (returnErr error) {
 		}
 	}()
 
+	// /chunks_head目录下的文件
 	files, err := listChunkFiles(cdm.dir.Name())
 	if err != nil {
 		return err
 	}
 
+	// 当前最后文件是空时进行清理
 	files, err = repairLastChunkFile(files)
 	if err != nil {
 		return err
 	}
 
+	// 生成索引，并放到对应的对象数组中：closers（文件流）、mmappedChunkFiles（文件信息）
 	chkFileIndices := make([]int, 0, len(files))
 	for seq, fn := range files {
-		f, err := fileutil.OpenMmapFile(fn)
+		f, err := fileutil.OpenMmapFile(fn) // mmap映射文件
 		if err != nil {
 			return errors.Wrapf(err, "mmap files, file: %s", fn)
 		}
-		cdm.closers[seq] = f
-		cdm.mmappedChunkFiles[seq] = &mmappedChunkFile{byteSlice: realByteSlice(f.Bytes())}
-		chkFileIndices = append(chkFileIndices, seq)
+		cdm.closers[seq] = f                                                                // 放入closers
+		cdm.mmappedChunkFiles[seq] = &mmappedChunkFile{byteSlice: realByteSlice(f.Bytes())} // 生成对象放到mmappedChunkFiles，存的是大小
+		chkFileIndices = append(chkFileIndices, seq)                                        // 索引，用来找mmappedChunkFiles、closers的对象
 	}
 
 	// Check for gaps in the files.
@@ -308,6 +312,7 @@ func (cdm *ChunkDiskMapper) openMMapFiles() (returnErr error) {
 		lastSeq = seq
 	}
 
+	// 校验文件内容大小
 	for i, b := range cdm.mmappedChunkFiles {
 		if b.byteSlice.Len() < HeadChunkFileHeaderSize {
 			return errors.Wrapf(errInvalidSize, "%s: invalid head chunk file header", files[i])
@@ -348,6 +353,7 @@ func listChunkFiles(dir string) (map[int]string, error) {
 // repairLastChunkFile deletes the last file if it's empty.
 // Because we don't fsync when creating these files, we could end
 // up with an empty file at the end during an abrupt shutdown.
+// 如果最后的文件是空，则清理掉。因为创建文件时不会fsync，所以当强制关闭时，最后的文件会是空的。
 func repairLastChunkFile(files map[int]string) (_ map[int]string, returnErr error) {
 	lastFile := -1
 	for seq := range files {
@@ -360,6 +366,7 @@ func repairLastChunkFile(files map[int]string) (_ map[int]string, returnErr erro
 		return files, nil
 	}
 
+	// 检查最后一个文件，空的删除
 	info, err := os.Stat(files[lastFile])
 	if err != nil {
 		return files, errors.Wrap(err, "file stat during last head chunk file repair")
@@ -873,6 +880,7 @@ func (cdm *ChunkDiskMapper) Truncate(mint int64) error {
 	}
 	sort.Ints(chkFileIndices)
 
+	// 遍历文件索引，比较每个chunk文件maxtime
 	var removedFiles []int
 	for _, seq := range chkFileIndices {
 		if seq == cdm.curFileSequence || cdm.mmappedChunkFiles[seq].maxt >= mint {
@@ -886,6 +894,7 @@ func (cdm *ChunkDiskMapper) Truncate(mint int64) error {
 	cdm.readPathMtx.RUnlock()
 
 	errs := tsdb_errors.NewMulti()
+	// 切割一个新文件，如果当前的文件有chunk
 	// Cut a new file only if the current file has some chunks.
 	if cdm.curFileSize() > HeadChunkFileHeaderSize {
 		// There is a known race condition here because between the check of curFileSize() and the call to CutNewFile()
@@ -893,6 +902,7 @@ func (cdm *ChunkDiskMapper) Truncate(mint int64) error {
 		// won't do any harm.
 		cdm.CutNewFile()
 	}
+	// 删除
 	pendingDeletes, err := cdm.deleteFiles(removedFiles)
 	errs.Add(err)
 

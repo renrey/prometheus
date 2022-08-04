@@ -51,10 +51,12 @@ var castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
 // Records bigger than the page size are split and flushed separately.
 // A flush is triggered when a single records doesn't fit the page size or
 // when the next record can't fit in the remaining free page space.
+// page：内存缓存buffer，用来进行批量磁盘写入，
+// 当前一条记录大于page size，or 下一条记录无法写入剩下的free page（不够空间），会执行flush
 type page struct {
-	alloc   int
-	flushed int
-	buf     [pageSize]byte
+	alloc   int            // 已使用下标
+	flushed int            // 已刷盘下标
+	buf     [pageSize]byte // 用于缓存的byte数组，长度就是page的大小
 }
 
 func (p *page) remaining() int {
@@ -86,7 +88,7 @@ type SegmentFile interface {
 type Segment struct {
 	SegmentFile
 	dir string
-	i   int
+	i   int // 下标序号
 }
 
 // Index returns the index of the segment.
@@ -143,6 +145,7 @@ func OpenWriteSegment(logger log.Logger, dir string, k int) (*Segment, error) {
 
 // CreateSegment creates a new segment k in dir.
 func CreateSegment(dir string, k int) (*Segment, error) {
+	// 文件名就是序号
 	f, err := os.OpenFile(SegmentName(dir, k), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o666)
 	if err != nil {
 		return nil, err
@@ -473,21 +476,25 @@ func (w *WAL) nextSegment() error {
 	}
 
 	// Only flush the current page if it actually holds data.
+	// 当前缓存page有数据了，先进行flush
 	if w.page.alloc > 0 {
 		if err := w.flushPage(true); err != nil {
 			return err
 		}
 	}
+	// 创建下一个segment（创建segment序号为当前的+1，文件名就是序号）
 	next, err := CreateSegment(w.Dir(), w.segment.Index()+1)
 	if err != nil {
 		return errors.Wrap(err, "create new segment file")
 	}
 	prev := w.segment
+	// 指向新的segment
 	if err := w.setSegment(next); err != nil {
 		return err
 	}
 
 	// Don't block further writes by fsyncing the last segment.
+	// 对上一个segment文件执行fsync
 	w.actorc <- func() {
 		if err := w.fsync(prev); err != nil {
 			level.Error(w.logger).Log("msg", "sync previous segment", "err", err)
@@ -527,6 +534,7 @@ func (w *WAL) flushPage(clear bool) error {
 		p.alloc = pageSize // Write till end of page.
 	}
 
+	// 当前segment调用write对未flush的缓存进行flush
 	n, err := w.segment.Write(p.buf[p.flushed:p.alloc])
 	if err != nil {
 		p.flushed += n

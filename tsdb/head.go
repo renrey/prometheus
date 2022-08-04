@@ -212,7 +212,7 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, opts *HeadOpti
 
 	h.chunkDiskMapper, err = chunks.NewChunkDiskMapper(
 		r,
-		mmappedChunksDir(opts.ChunkDirRoot),
+		mmappedChunksDir(opts.ChunkDirRoot), // /chunks_head
 		opts.ChunkPool,
 		opts.ChunkWriteBufferSize,
 		opts.ChunkWriteQueueSize,
@@ -779,12 +779,14 @@ func (h *Head) SetMinValidTime(minValidTime int64) {
 // Truncate removes old data before mint from the head and WAL.
 func (h *Head) Truncate(mint int64) (err error) {
 	initialize := h.MinTime() == math.MaxInt64
+	// 1。 chunk截取
 	if err := h.truncateMemory(mint); err != nil {
 		return err
 	}
 	if initialize {
 		return nil
 	}
+	// 2。WAL截取
 	return h.truncateWAL(mint)
 }
 
@@ -794,6 +796,7 @@ func (h *Head) OverlapsClosedInterval(mint, maxt int64) bool {
 }
 
 // truncateMemory removes old data before mint from the head.
+// 从head里清掉比mint老的数据
 func (h *Head) truncateMemory(mint int64) (err error) {
 	h.chunkSnapshotMtx.Lock()
 	defer h.chunkSnapshotMtx.Unlock()
@@ -856,6 +859,7 @@ func (h *Head) truncateMemory(mint int64) (err error) {
 	}
 
 	// Truncate the chunk m-mapper.
+	// 截断磁盘里的chunk
 	if err := h.chunkDiskMapper.Truncate(mint); err != nil {
 		return errors.Wrap(err, "truncate chunks.HeadReadWriter")
 	}
@@ -942,6 +946,7 @@ func (h *Head) truncateWAL(mint int64) error {
 	start := time.Now()
 	h.lastWALTruncationTime.Store(mint)
 
+	// 获取所有segment文件
 	first, last, err := wal.Segments(h.wal.Dir())
 	if err != nil {
 		return errors.Wrap(err, "get segment range")
